@@ -1,60 +1,67 @@
-// Carrega as variáveis de ambiente do arquivo .env em desenvolvimento
 require('dotenv').config();
 
 const express = require('express');
-const mysql = require('mysql2');
+const { Pool } = require('pg');
 const cors = require('cors');
 
 const app = express();
-// O Render define a variável PORT automaticamente em produção
 const port = process.env.PORT || 3000;
 
-// Middleware CORS
 app.use(cors());
-
-// Middleware para entender JSON no corpo da requisição
 app.use(express.json());
 
-// 1. Configura a conexão com o MySQL
-const connection = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306
-});
-
-// Conecta ao banco de dados
-connection.connect((err) => {
-  if (err) {
-    console.error('Erro ao conectar ao MySQL: ', err.stack);
-    return;
+// Configuração do Pool de conexão com a URI do Supabase
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Necessário para aceitar a conexão SSL do Supabase
   }
-  console.log('Conectado ao MySQL com sucesso!');
-
-  // Cria a tabela 'alunos' caso ela não exista
-  const createTableQuery = `
-    CREATE TABLE IF NOT EXISTS alunos(
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      nome VARCHAR(255) NOT NULL
-    )`;
-
-  connection.query(createTableQuery, (err) => {
-    if (err) {
-      console.error('Erro ao criar tabela: ', err.stack);
-      return;
-    }
-    console.log('Tabela alunos pronta para uso!');
-  });
 });
 
-app.get('/alunos', (req, res) => {
-  connection.query('SELECT * FROM alunos', (err, results) => {
-    if (err) {
-      return res.status(500).json({ erro: 'Erro ao buscar alunos' });
-    }
-    res.json(results);
-  });
+// Testa a conexão e garante que a tabela 'alunos' seja criada no PostgreSQL
+pool.query(`
+  CREATE TABLE IF NOT EXISTS alunos (
+    id SERIAL PRIMARY KEY,
+    nome VARCHAR(255) NOT NULL
+  );
+`, (err, res) => {
+  if (err) {
+    console.error('Erro ao conectar ao Supabase/PostgreSQL:', err.stack);
+  } else {
+    console.log('Conectado ao Supabase com sucesso!');
+    console.log('Tabela alunos pronta para uso!');
+  }
+});
+
+// Rota para buscar todos os alunos
+app.get('/alunos', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM alunos');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Erro na consulta:', err);
+    res.status(500).json({ erro: 'Erro ao buscar alunos' });
+  }
+});
+
+// Rota para cadastrar um novo aluno
+app.post('/alunos', async (req, res) => {
+  const { nome } = req.body;
+  
+  if (!nome) {
+    return res.status(400).json({ erro: 'O campo nome é obrigatório' });
+  }
+
+  try {
+    const result = await pool.query(
+      'INSERT INTO alunos (nome) VALUES ($1) RETURNING *',
+      [nome]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Erro ao inserir aluno:', err);
+    res.status(500).json({ erro: 'Erro ao cadastrar aluno' });
+  }
 });
 
 app.listen(port, () => {
